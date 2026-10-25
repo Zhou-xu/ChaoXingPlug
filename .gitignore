@@ -14,6 +14,9 @@ stats-*.json
 .wxt
 web-ext.config.ts
 
+# 本地测试密钥配置（勿提交）
+test/local.config.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

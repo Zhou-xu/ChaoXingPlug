@@ -1,119 +1,179 @@
+// 后台服务：配置存取、消息路由、批量答题编排、答题日志
+import {
+  askOne,
+  normalizeAuthHeader,
+  DEFAULT_AI_CONFIG,
+  type AiConfig,
+  type QuestionPayload,
+} from '@/lib/ai-protocol';
+import type { QuestionKind } from '@/lib/answer-engine';
 
-//获取用户apikey与requestUrl
+/** background -> content 的答案载荷 */
+export interface AnswerPayload {
+  index: number;
+  kind: QuestionKind;
+  /** 单选/多选: "A" / "ABC"；判断: "对"/"错"；填空: string[]；简答: string */
+  answer: string | string[];
+  analysis: string;
+  /** answered 成功 / failed AI 未给出可用答案 */
+  status: 'answered' | 'failed';
+  error?: string;
+}
 
-const userInfo: { requestUrl: string; apikey: string } = {
-  requestUrl: '',
-  apikey: '',
-};
+// ===================== 配置 =====================
 
-// ⚠️ 启动时必须从 storage 读取已有配置，否则 userInfo.requestUrl 是空字符串
-browser.storage.local.get(['requestUrl', 'apikey']).then((result: any) => {
-  userInfo.requestUrl = result.requestUrl || '';
-  userInfo.apikey = result.apikey || '';
-  console.log('【启动】初始化 userInfo:', userInfo);
-});
+/** 内存缓存，避免每次请求都读 storage */
+const config: AiConfig = { ...DEFAULT_AI_CONFIG };
+
+async function loadConfig(): Promise<AiConfig> {
+  const result: any = await browser.storage.local.get(['requestUrl', 'apikey', 'model']);
+  config.requestUrl = result.requestUrl || DEFAULT_AI_CONFIG.requestUrl;
+  config.apikey = result.apikey || '';
+  config.model = result.model || DEFAULT_AI_CONFIG.model;
+  return { ...config };
+}
+
+// ===================== 答题日志（供 popup 答题状态页展示） =====================
+
+export interface AnswerLogItem {
+  index: number;
+  kind: QuestionKind;
+  title: string;
+  answer: string | string[];
+  analysis: string;
+  status: 'answered' | 'failed';
+  error?: string;
+}
+
+export interface AnswerLog {
+  time: number;
+  running: boolean;
+  total: number;
+  done: number;
+  items: AnswerLogItem[];
+}
+
+async function writeLog(patch: Partial<AnswerLog> & { items?: AnswerLogItem[] }) {
+  const result: any = await browser.storage.local.get('answerLog');
+  const log: AnswerLog = (result.answerLog as AnswerLog) || {
+    time: Date.now(), running: false, total: 0, done: 0, items: [],
+  };
+  Object.assign(log, patch);
+  await browser.storage.local.set({ answerLog: log });
+}
+
+// ===================== 消息入口 =====================
 
 export default defineBackground(() => {
+  // 启动时读取已保存的配置
+  loadConfig().then(() => console.log('【启动】已加载配置, model =', config.model));
 
-  // 监听消息
-  browser.runtime.onMessage.addListener((request: any, sender: any, sendResponse: any) => {
-    //content 题目答题
-    if (request.type === 'seedQuestion') {
-      console.log('【请求】收到题目查询，问题数量:', request.Question?.length);
-      console.log('【请求】当前 userInfo.requestUrl =', JSON.stringify(userInfo.requestUrl));
-      console.log('【请求】当前 userInfo.apikey =', JSON.stringify(userInfo.apikey));
-      seedQuestion(userInfo, request.Question).then((a) => {
-        console.log('【返回】seedQuestion 返回结果:', a);
-        sendResponse(a);
-      }).catch((error) => {
-        console.error('【错误】seedQuestion 异常:', error);
-        sendResponse({ type: 'responseQuestion', error: error.message });
-      });
-      return true;  // 异步响应，告诉浏览器等待 sendResponse
+  browser.runtime.onMessage.addListener((request: any, _sender: any, sendResponse: any) => {
+    // content 提交题目，批量请求 AI 作答
+    if (request.type === 'seedQuestion' && Array.isArray(request.questions)) {
+      seedQuestions({ ...config }, request.questions)
+        .then((answers) => sendResponse({ type: 'responseQuestion', ok: true, answers }))
+        .catch((error) => {
+          console.error('【错误】答题流程异常:', error);
+          writeLog({ running: false }).catch(() => {});
+          sendResponse({ type: 'responseQuestion', ok: false, error: error.message || String(error) });
+        });
+      return true; // 异步响应
     }
-    //content 存储vue界面用户apikey与requestUrl
+    // popup 保存用户 API 配置
     else if (request.type === 'userInfo') {
-      console.log('【存储】保存 requestUrl:', request.url);
-      console.log('【存储】保存 apikey:', request.apiKey);
-      storeUserInfo(request.url, request.apiKey)
-      .then(async () => {
-        const result: any = await browser.storage.local.get(['requestUrl', 'apikey']);
-        userInfo.requestUrl = result.requestUrl || '';
-        userInfo.apikey = result.apikey || '';
-        sendResponse({ status: "success" });
-        console.log('【存储】更新后 userInfo:', userInfo);
-      }).catch((error) => { console.log("储存用户信息失败：" + error.message); });
-      return true;  // 异步响应，告诉浏览器等待 sendResponse
+      storeUserInfo(request.url, request.apiKey, request.model)
+        .then(async () => {
+          await loadConfig();
+          sendResponse({ status: 'success' });
+        })
+        .catch((error) => {
+          console.error('【错误】保存配置失败:', error);
+          sendResponse({ status: 'error', message: error.message });
+        });
+      return true;
+    }
+    // popup 连接测试
+    else if (request.type === 'testConfig') {
+      testConfig({ ...config })
+        .then((r) => sendResponse(r))
+        .catch((error) => sendResponse({ ok: false, message: error.message || String(error) }));
+      return true;
     }
   });
-
 });
 
-//TODO:AI接口调用
-//发送请求获取问题
-const seedQuestion = async (info: { requestUrl: string; apikey: string }, questions: string[]): Promise<any> => {
-  // 1. 空值检查
-  if (!info.requestUrl || !info.apikey) {
-    throw new Error('【配置缺失】请先在弹窗中配置 requestUrl 和 apikey，然后重新触发答题');
-  }
-  // 2. URL 格式检查——必须是 http/https 开头
-  if (!info.requestUrl.startsWith('http://') && !info.requestUrl.startsWith('https://')) {
-    throw new Error('【URL 格式错误】requestUrl 必须以 http:// 或 https:// 开头，当前值: ' + info.requestUrl);
-  }
-  console.log('【API】调用地址:', info.requestUrl);
-  console.log('【API】请求问题:', questions);
-  // 遍历每个问题，发送请求(防止单对话文字长度超过最大限制)
-  let result: string[] = [];
-  for (let i = 0; i < questions.length; i++) {
-    console.log('当前处理问题:', i+1, '问题:', questions[i]);
-    const response = await fetch(info.requestUrl, {
+async function storeUserInfo(requestUrl: string, apikey: string, model: string) {
+  if (requestUrl != null && requestUrl !== '') await browser.storage.local.set({ requestUrl });
+  if (apikey != null && apikey !== '') await browser.storage.local.set({ apikey });
+  if (model != null && model !== '') await browser.storage.local.set({ model });
+}
+
+/** 连接测试：发一条最小请求验证 url/key/model 可用 */
+async function testConfig(cfg: AiConfig): Promise<{ ok: boolean; message: string }> {
+  try {
+    if (!cfg.apikey) return { ok: false, message: 'API Key 为空' };
+    if (!/^https?:\/\//.test(cfg.requestUrl)) return { ok: false, message: '接口地址必须以 http(s):// 开头' };
+    const resp = await fetch(cfg.requestUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': info.apikey
+        Authorization: normalizeAuthHeader(cfg.apikey),
       },
       body: JSON.stringify({
-        model: 'glm-4.6v',
-        messages: [
-          {
-            role: 'user',
-            content: '请严格按以下格式回答本题：\n' +
-                '答案：<选项字母>\n' +
-                '解析：<不超过50字>'
-          },
-            {
-              role: 'user',
-              content: questions[i]
-            }
-        ]
-      })
+        model: cfg.model,
+        messages: [{ role: 'user', content: '回复OK' }],
+        max_tokens: 20,
+        thinking: { type: 'disabled' },
+      }),
     });
-    console.log('【API】HTTP 状态码:', response.status, response.statusText);
-    const text = await response.text();
-    console.log('响应:', text);
-    result.push("问题" + (i + 1) + "：" + JSON.parse(text).choices[0].message.content);
+    if (!resp.ok) {
+      const t = (await resp.text()).slice(0, 200);
+      return { ok: false, message: `HTTP ${resp.status}：${t}` };
+    }
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content;
+    return { ok: true, message: `连接成功，模型回复：${String(content).slice(0, 50)}` };
+  } catch (e: any) {
+    return { ok: false, message: e.message || String(e) };
+  }
+}
+
+// ===================== 批量答题主流程 =====================
+
+async function seedQuestions(cfg: AiConfig, questions: QuestionPayload[]): Promise<AnswerPayload[]> {
+  if (!cfg.apikey) throw new Error('API Key 未配置，请先在「我的AI」页面填写并保存');
+  if (!/^https?:\/\//.test(cfg.requestUrl)) throw new Error('接口地址必须以 http(s):// 开头');
+
+  await writeLog({ time: Date.now(), running: true, total: questions.length, done: 0, items: [] });
+
+  const answers: AnswerPayload[] = [];
+  const logItems: AnswerLogItem[] = [];
+
+  // 顺序请求，避免触发限流；每题完成即写日志，popup 可实时看到进度
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    let payload: AnswerPayload;
+    try {
+      const { answer, analysis } = await askOne(cfg, q);
+      payload = { index: q.index, kind: q.kind, answer, analysis, status: 'answered' };
+    } catch (e: any) {
+      console.error(`【错误】第 ${q.index + 1} 题请求失败:`, e);
+      payload = {
+        index: q.index, kind: q.kind, answer: '', analysis: '',
+        status: 'failed', error: e.message || String(e),
+      };
+    }
+    answers.push(payload);
+    logItems.push({
+      index: q.index, kind: q.kind,
+      title: (q.title || '').slice(0, 80),
+      answer: payload.answer as string | string[], analysis: payload.analysis,
+      status: payload.status, error: payload.error,
+    });
+    await writeLog({ done: i + 1, items: [...logItems] });
   }
 
-
-  // 4. 读取响应内容
-  const responseText = result.join('\n');
-  console.log('【API】原始响应内容前500字符:', responseText.slice(0, 500));
-
-  // 5. 尝试解析为 JSON
-  try {
-    return result;
-  } catch {
-    // 如果不是 JSON（例如返回了 HTML 或 JS 文件），直接返回文本
-    return { type: 'responseQuestion', error: 'API 未返回 JSON，响应内容: ' + responseText.slice(0, 200) };
-  }
-};
-
-//存储用户apikey与requestUrl
-async function storeUserInfo(requestUrl: string, apikey: string,) {
-  if(requestUrl !== null) {
-    await browser.storage.local.set({"requestUrl":requestUrl});
-  }
-  if(apikey !== null) {
-    await browser.storage.local.set({"apikey":apikey});
-  }
+  await writeLog({ running: false });
+  return answers;
 }

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>学习通作业 mock 页面（自动化测试用）</title>
+  <style>
+    body { font: 14px/1.8 "Microsoft YaHei", sans-serif; background: #f5f6f8; padding: 30px; }
+    .questionLi { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 16px; }
+    .mark_name { margin-bottom: 8px; }
+    .colorShallow { color: #999; font-size: 12px; margin-right: 8px; }
+    .answerBg { padding: 6px 10px; border: 1px solid #eee; border-radius: 6px; margin: 4px 0; cursor: pointer; }
+    .answerBg.check_answer { border-color: #4a90e2; background: #eef5ff; }
+    textarea { width: 90%; min-height: 60px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; }
+  </style>
+</head>
+<body>
+<h2>《测试课程》作业（模拟页面）</h2>
+
+<!-- 第1题：单选 -->
+<div class="padBom50 questionLi fontLabel singleQuesId" id="question1">
+  <div class="mark_name"><span class="colorShallow">单选题</span><span class="colorShallow">(2分)</span>下列哪个城市是中国的首都？</div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">A</div><div class="workFont fl">上海</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">B</div><div class="workFont fl">北京</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">C</div><div class="workFont fl">广州</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">D</div><div class="workFont fl">深圳</div></div>
+</div>
+
+<!-- 第2题：多选 -->
+<div class="padBom50 questionLi fontLabel multipleQuesId" id="question2">
+  <div class="mark_name"><span class="colorShallow">多选题</span><span class="colorShallow">(4分)</span>下列哪些城市是中国的直辖市？</div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">A</div><div class="workFont fl">北京</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">B</div><div class="workFont fl">上海</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">C</div><div class="workFont fl">广州</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="choice num_option fl">D</div><div class="workFont fl">重庆</div></div>
+</div>
+
+<!-- 第3题：判断 -->
+<div class="padBom50 questionLi fontLabel judgementNqueId" id="question3">
+  <div class="mark_name"><span class="colorShallow">判断题</span><span class="colorShallow">(2分)</span>地球是太阳系中的一颗行星。</div>
+  <div class="clearfix answerBg workTextWrap"><div class="workFont fl">对</div></div>
+  <div class="clearfix answerBg workTextWrap"><div class="workFont fl">错</div></div>
+</div>
+
+<!-- 第4题：填空（2空） -->
+<div class="padBom50 questionLi fontLabel completionQuesId" id="question4">
+  <div class="mark_name"><span class="colorShallow">填空题</span><span class="colorShallow">(4分)</span>中国最长的河流是（　），它的发源地是（　）。</div>
+  <div class="mark_name"><span class="colorShallow">第1空</span></div>
+  <textarea id="answerEditor1"></textarea>
+  <div class="mark_name"><span class="colorShallow">第2空</span></div>
+  <textarea id="answerEditor2"></textarea>
+</div>
+
+<!-- 第5题：简答 -->
+<div class="padBom50 questionLi fontLabel shortanswerQuesId" id="question5">
+  <div class="mark_name"><span class="colorShallow">简答题</span><span class="colorShallow">(10分)</span>请简述什么是操作系统。</div>
+  <textarea id="answerEditor5"></textarea>
+</div>
+
+<script>
+  // 模拟学习通点击选中行为：answerBg 点击后加 check_answer 类（单选/判断互斥，多选切换）
+  document.querySelectorAll('.questionLi').forEach(function (q) {
+    var options = q.querySelectorAll('.answerBg');
+    options.forEach(function (opt) {
+      opt.addEventListener('click', function () {
+        var cls = q.className;
+        if (cls.indexOf('singleQuesId') >= 0 || cls.indexOf('judgement') >= 0) {
+          options.forEach(function (o) { o.classList.remove('check_answer'); });
+        }
+        opt.classList.toggle('check_answer');
+      });
+    });
+  });
+</script>
+</body>
+</html>
